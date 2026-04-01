@@ -1,37 +1,71 @@
+nux
+;  รูปแบบ: <Operand1> <operator> <Operand2>
+;  Operand: 0–9999  |  Operator: + - * /
+;  compile:  nasm -f elf64 calc.asm -o calc.o
+;  link:     ld calc.o -o calc
+; ============================================================
+
+
+; ╔══════════════════════════════════════════════════════════╗
+; ║                      คนที่ 1                             ║
+; ║         Setup ข้อมูล + รับ Input + Parse Operand1        ║
+; ╚══════════════════════════════════════════════════════════╝
+
+; ─────────────────────────────────────────────
+;  SECTION .DATA — ข้อมูลที่กำหนดค่าไว้ล่วงหน้า
+; ─────────────────────────────────────────────
 section .data
+
     prompt      db  'Enter statement : '   ; ข้อความที่จะแสดงให้ผู้ใช้พิมพ์
     prompt_len  equ $ - prompt             ; ความยาวของ prompt คำนวณจากตำแหน่งปัจจุบัน ($) ลบต้น prompt
     newline     db  10                     ; ASCII 10 = '\n' สำหรับขึ้นบรรทัดใหม่
 
+
+; ─────────────────────────────────────────────
+;  SECTION .BSS — จองพื้นที่ RAM ยังไม่มีค่า
+; ─────────────────────────────────────────────
 section .bss
+
     buf     resb 32     ; buffer รับ input จากผู้ใช้ (สูงสุด 32 bytes)
     outbuf  resb 8      ; buffer สำหรับแปลงตัวเลข → string ก่อนพิมพ์
 
+
+; ─────────────────────────────────────────────
+;  SECTION .TEXT — โค้ดโปรแกรม
+; ─────────────────────────────────────────────
 section .text
+
 global _start       ; บอก linker ว่า _start คือจุดเริ่มต้นโปรแกรม (เหมือน main)
+
+
 _start:
 
+    ; ── พิมพ์ "Enter statement : " ──────────
     mov     rax, 1              ; syscall number 1 = sys_write
     mov     rdi, 1              ; file descriptor 1 = stdout (หน้าจอ)
     mov     rsi, prompt         ; address ของ string ที่จะพิมพ์
     mov     rdx, prompt_len     ; จำนวน bytes ที่จะพิมพ์
     syscall                     ; เรียก kernel → พิมพ์ข้อความ
 
+    ; ── รับ input จากแป้นพิมพ์ ──────────────
     mov     rax, 0              ; syscall number 0 = sys_read
     mov     rdi, 0              ; file descriptor 0 = stdin (แป้นพิมพ์)
     mov     rsi, buf            ; address ที่จะเก็บข้อมูลที่รับมา
     mov     rdx, 32             ; รับสูงสุด 32 bytes (ป้องกัน buffer overflow)
     syscall                     ; เรียก kernel → รอ user พิมพ์แล้วกด Enter
 
+    ; ── Parse Operand1 → rbx ────────────────
     mov     rsi, buf            ; ตั้ง pointer (rsi) ชี้มาที่ต้น buf
     xor     rbx, rbx            ; rbx = 0  (จะสะสมค่า Operand1 ที่นี่)
 
+.skip_space_op1:
     movzx   rax, byte [rsi]     ; อ่าน 1 byte จาก address rsi → rax (zero-extend)
     cmp     al, ' '             ; เทียบกับ ASCII 32 = space
     jne     .read_digits_op1    ; ถ้าไม่ใช่ space → เริ่มอ่านตัวเลข
     inc     rsi                 ; ถ้าเป็น space → เลื่อน pointer ไปตัวถัดไป
     jmp     .skip_space_op1     ; วนซ้ำข้ามต่อ
 
+.read_digits_op1:
     movzx   rax, byte [rsi]     ; อ่านตัวอักษรปัจจุบัน
     cmp     al, '0'             ; ตรวจว่า >= '0' (ASCII 48)
     jl      .done_op1           ; ถ้าน้อยกว่า → ไม่ใช่ตัวเลข หยุด
@@ -46,6 +80,15 @@ _start:
     jmp     .read_digits_op1    ; วนอ่านหลักถัดไป
 
 .done_op1:
+    ; rbx = ค่า Operand1  |  rsi ชี้อยู่ที่ตำแหน่งหลัง Operand1
+
+
+; ╔══════════════════════════════════════════════════════════╗
+; ║                      คนที่ 2                             ║
+; ║       หา Operator + Parse Operand2 + Dispatch           ║
+; ╚══════════════════════════════════════════════════════════╝
+
+    ; ── หา Operator → r8b ───────────────────
 .skip_to_op:
     movzx   rax, byte [rsi]     ; อ่านตัวอักษรปัจจุบัน
     cmp     al, ' '             ; ถ้าเป็น space → ข้าม
@@ -67,6 +110,8 @@ _start:
 .found_op:
     mov     r8b, al             ; เก็บ operator character ไว้ใน r8b
     inc     rsi                 ; เลื่อน pointer ผ่าน operator ไปยัง Operand2
+
+    ; ── Parse Operand2 → rcx ────────────────
     xor     rcx, rcx            ; rcx = 0 (จะสะสมค่า Operand2 ที่นี่)
 
 .skip_space_op2:
@@ -91,7 +136,9 @@ _start:
     jmp     .read_digits_op2
 
 .done_op2:
+    ; rcx = ค่า Operand2
 
+    ; ── Dispatch — เลือก operation ──────────
     cmp     r8b, '+'            ; operator คือ + ?
     je      do_add
     cmp     r8b, '-'            ; operator คือ - ?
@@ -99,6 +146,15 @@ _start:
     cmp     r8b, '*'            ; operator คือ * ?
     je      do_mul
     jmp     do_div              ; ถ้าไม่ใช่สามอย่างข้างบน ต้องเป็น /
+
+
+; ╔══════════════════════════════════════════════════════════╗
+; ║                      คนที่ 3                             ║
+; ║         คำนวณ + แปลง int→string + พิมพ์ + Exit          ║
+; ╚══════════════════════════════════════════════════════════╝
+
+    ; ── Operations ──────────────────────────
+    ; rbx = Operand1  |  rcx = Operand2  |  ผลลัพธ์เก็บใน rax
 
 do_add:
     mov     rax, rbx            ; rax = Operand1
@@ -124,6 +180,7 @@ do_div:
                                 ; rdx = remainder (เศษ) ← ไม่ได้ใช้
     jmp     print_result
 
+    ; ── แปลง int → string แล้วพิมพ์ ────────
 print_result:
     lea     rsi, [outbuf + 7]   ; ชี้ rsi ไปท้าย outbuf
                                 ; จะค่อยๆ ถอยหน้ามาทีละ digit (เขียนจากหลังไปหน้า)
@@ -143,12 +200,14 @@ print_result:
     test    rax, rax            ; ตรวจว่า rax = 0 ไหม (หมดตัวเลขแล้ว)
     jnz     .convert_loop       ; ยังไม่ 0 → วนต่อ
 
+    ; ── พิมพ์ตัวเลขผลลัพธ์ ──────────────────
     mov     rax, 1              ; sys_write
     mov     rdi, 1              ; stdout
-
+    ; rsi ยังชี้อยู่ที่ต้น string ที่แปลงแล้ว
     mov     rdx, r9             ; ความยาว = จำนวน digit ที่นับ
     syscall
 
+    ; ── พิมพ์ newline ────────────────────────
     mov     rax, 1
     mov     rdi, 1
     mov     rsi, newline        ; ชี้ไปที่ newline byte (ASCII 10)
