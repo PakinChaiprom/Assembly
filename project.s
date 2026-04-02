@@ -1,220 +1,201 @@
-nux
-;  รูปแบบ: <Operand1> <operator> <Operand2>
-;  Operand: 0–9999  |  Operator: + - * /
-;  compile:  nasm -f elf64 calc.asm -o calc.o
-;  link:     ld calc.o -o calc
-; ============================================================
+section .data ;Jeno
+	LF      equ     10
+	NULL    equ     0
+	EXIT_SUCCESS equ 0 ; success code
+	STDIN   equ     0
+	STDOUT  equ     1
+	STDERR  equ     2
+	SYS_read  equ	0	
+	SYS_write equ   1
+	SYS_exit equ    60
+	msg     db      "Enter statement : ", NULL
+	newLine db      LF, NULL
+	inputLen equ 32
+	op1 dq 0
+	op2 dq 0
+	operator db 0
+	err db "Error", NULL
 
+section .bss ;Jeno
+       	inbuffer	resb	100	;input buffer
+	outbuffer	resb	8
 
-; ╔══════════════════════════════════════════════════════════╗
-; ║                      คนที่ 1                             ║
-; ║         Setup ข้อมูล + รับ Input + Parse Operand1        ║
-; ╚══════════════════════════════════════════════════════════╝
-
-; ─────────────────────────────────────────────
-;  SECTION .DATA — ข้อมูลที่กำหนดค่าไว้ล่วงหน้า
-; ─────────────────────────────────────────────
-section .data
-
-    prompt      db  'Enter statement : '   ; ข้อความที่จะแสดงให้ผู้ใช้พิมพ์
-    prompt_len  equ $ - prompt             ; ความยาวของ prompt คำนวณจากตำแหน่งปัจจุบัน ($) ลบต้น prompt
-    newline     db  10                     ; ASCII 10 = '\n' สำหรับขึ้นบรรทัดใหม่
-
-
-; ─────────────────────────────────────────────
-;  SECTION .BSS — จองพื้นที่ RAM ยังไม่มีค่า
-; ─────────────────────────────────────────────
-section .bss
-
-    buf     resb 32     ; buffer รับ input จากผู้ใช้ (สูงสุด 32 bytes)
-    outbuf  resb 8      ; buffer สำหรับแปลงตัวเลข → string ก่อนพิมพ์
-
-
-; ─────────────────────────────────────────────
-;  SECTION .TEXT — โค้ดโปรแกรม
-; ─────────────────────────────────────────────
-section .text
-
-global _start       ; บอก linker ว่า _start คือจุดเริ่มต้นโปรแกรม (เหมือน main)
-
-
+section .text ;Jeno
+global _start 
 _start:
+	mov rdi, newLine 
+	call printString
 
-    ; ── พิมพ์ "Enter statement : " ──────────
-    mov     rax, 1              ; syscall number 1 = sys_write
-    mov     rdi, 1              ; file descriptor 1 = stdout (หน้าจอ)
-    mov     rsi, prompt         ; address ของ string ที่จะพิมพ์
-    mov     rdx, prompt_len     ; จำนวน bytes ที่จะพิมพ์
-    syscall                     ; เรียก kernel → พิมพ์ข้อความ
+	mov rdi, msg
+	call printString
 
-    ; ── รับ input จากแป้นพิมพ์ ──────────────
-    mov     rax, 0              ; syscall number 0 = sys_read
-    mov     rdi, 0              ; file descriptor 0 = stdin (แป้นพิมพ์)
-    mov     rsi, buf            ; address ที่จะเก็บข้อมูลที่รับมา
-    mov     rdx, 32             ; รับสูงสุด 32 bytes (ป้องกัน buffer overflow)
-    syscall                     ; เรียก kernel → รอ user พิมพ์แล้วกด Enter
+	mov rax, SYS_read
+	mov rdi, STDIN
+	mov rsi, inbuffer
+	mov rdx, inputLen
+	syscall
 
-    ; ── Parse Operand1 → rbx ────────────────
-    mov     rsi, buf            ; ตั้ง pointer (rsi) ชี้มาที่ต้น buf
-    xor     rbx, rbx            ; rbx = 0  (จะสะสมค่า Operand1 ที่นี่)
+	mov rsi, inbuffer
+	mov rbx, 0
 
-.skip_space_op1:
-    movzx   rax, byte [rsi]     ; อ่าน 1 byte จาก address rsi → rax (zero-extend)
-    cmp     al, ' '             ; เทียบกับ ASCII 32 = space
-    jne     .read_digits_op1    ; ถ้าไม่ใช่ space → เริ่มอ่านตัวเลข
-    inc     rsi                 ; ถ้าเป็น space → เลื่อน pointer ไปตัวถัดไป
-    jmp     .skip_space_op1     ; วนซ้ำข้ามต่อ
+	call readOp
+	mov qword[op1], rbx
+	
+	mov rcx, 0
+	call readOperator
+	
+	mov rbx, 0
+	call readOp
+	mov qword[op2], rbx
 
-.read_digits_op1:
-    movzx   rax, byte [rsi]     ; อ่านตัวอักษรปัจจุบัน
-    cmp     al, '0'             ; ตรวจว่า >= '0' (ASCII 48)
-    jl      .done_op1           ; ถ้าน้อยกว่า → ไม่ใช่ตัวเลข หยุด
-    cmp     al, '9'             ; ตรวจว่า <= '9' (ASCII 57)
-    jg      .done_op1           ; ถ้ามากกว่า → ไม่ใช่ตัวเลข หยุด
+	mov rax, 0
+	mov rax, qword[op1]
+	mov rbx, 0
+	mov rbx, qword[op2]
+	cmp rcx, '+'
+	je doAdd
+	cmp rcx, '-'
+	je doSub
+	cmp rcx, '*' 
+	je doMul
+	cmp rcx, '/'
+	je doDiv
 
-    sub     al, '0'             ; แปลง ASCII → digit: '7' (55) - '0' (48) = 7
-    imul    rbx, 10             ; เลื่อนหลัก: rbx × 10 เพื่อเปิดที่ให้หลักใหม่
-    add     rbx, rax            ; บวกหลักใหม่: เช่น 12×10 + 3 = 123
+doAdd: ;Mark
+	add rax, rbx
+	jmp printResult
 
-    inc     rsi                 ; เลื่อน pointer ไปตัวอักษรถัดไป
-    jmp     .read_digits_op1    ; วนอ่านหลักถัดไป
+doSub: ;Mark
+	sub rax, rbx
+	cmp rax, 0
+	jl error
+	jmp printResult
+	
+doMul: ;Mark
+	imul rax, rbx
+	jmp printResult
 
-.done_op1:
-    ; rbx = ค่า Operand1  |  rsi ชี้อยู่ที่ตำแหน่งหลัง Operand1
+doDiv: ;Mark
+	mov rdx, 0
+	div rbx
+	jmp printResult
 
+error: ;Jeno
+	mov rdi, err
+	call printString
+	mov rdi, newLine
+	call printString
+	jmp exit
+	
+printResult: ;Phoom
+	push rsi
+	mov rsi, outbuffer+7
+	mov r9, 0
+.convertLoop:
+	mov rdx, 0
+	mov rcx, 10
+	div rcx
+	add dl, '0'
+	dec rsi
+	mov [rsi], dl
 
-; ╔══════════════════════════════════════════════════════════╗
-; ║                      คนที่ 2                             ║
-; ║       หา Operator + Parse Operand2 + Dispatch           ║
-; ╚══════════════════════════════════════════════════════════╝
+	inc r9
+	cmp rax, 0
+	jne .convertLoop
 
-    ; ── หา Operator → r8b ───────────────────
-.skip_to_op:
-    movzx   rax, byte [rsi]     ; อ่านตัวอักษรปัจจุบัน
-    cmp     al, ' '             ; ถ้าเป็น space → ข้าม
-    je      .next_op_char
+	mov rax, SYS_write
+	mov rdi, STDOUT
+	mov rdx, r9
+	syscall
 
-    cmp     al, '+'             ; เปรียบกับ +
-    je      .found_op
-    cmp     al, '-'             ; เปรียบกับ -
-    je      .found_op
-    cmp     al, '*'             ; เปรียบกับ *
-    je      .found_op
-    cmp     al, '/'             ; เปรียบกับ /
-    je      .found_op
+	mov rdi, newLine
+	call printString
 
-.next_op_char:
-    inc     rsi                 ; ไม่ใช่ operator → เลื่อนต่อ
-    jmp     .skip_to_op
+	pop rsi
+	jmp exit
 
-.found_op:
-    mov     r8b, al             ; เก็บ operator character ไว้ใน r8b
-    inc     rsi                 ; เลื่อน pointer ผ่าน operator ไปยัง Operand2
+exit:
+	mov rax, SYS_exit
+	mov rdi, EXIT_SUCCESS
+	syscall
+	
+readOperator: ;Mark
+.skipspace:
+	movzx rax, byte[rsi]
+	cmp al, ' '
+	jne .foundOperator
+	inc rsi
+	jmp .skipspace
+.foundOperator: 
+	cmp al, '+'
+	je .saveOperator
+	cmp al, '-'
+	je .saveOperator
+	cmp al, '*'
+	je .saveOperator
+	cmp al, '/'
+	je .saveOperator
 
-    ; ── Parse Operand2 → rcx ────────────────
-    xor     rcx, rcx            ; rcx = 0 (จะสะสมค่า Operand2 ที่นี่)
+	inc rsi
+	jmp .skipspace
+	
+.saveOperator:
+	movzx rcx, al
+	inc rsi
+	ret
+	
+readOp: ;Jeno
+	mov r10, 0
+.skipSpace:
+	movzx rax, byte[rsi]
+	cmp al, ' '
+	jne .readDigit
+	inc rsi
+	jmp .skipSpace
+.readDigit:
+	movzx rax, byte[rsi]
+	cmp al, '0'
+	jl .readDone
+	cmp al, '9'
+	jg .readDone
 
-.skip_space_op2:
-    movzx   rax, byte [rsi]     ; อ่านตัวอักษรปัจจุบัน
-    cmp     al, ' '             ; ถ้าเป็น space → ข้าม
-    jne     .read_digits_op2
-    inc     rsi
-    jmp     .skip_space_op2
+	sub al, '0'
+	imul rbx, 10
+	add rbx, rax
+	
+	inc r10	
 
-.read_digits_op2:
-    movzx   rax, byte [rsi]     ; อ่านตัวอักษรปัจจุบัน
-    cmp     al, '0'
-    jl      .done_op2
-    cmp     al, '9'
-    jg      .done_op2
+	inc rsi
+	cmp r10, 4
+	jg error
+	jmp .skipSpace
+.readDone:
+	ret
+	
 
-    sub     al, '0'             ; แปลง ASCII → digit
-    imul    rcx, 10             ; เลื่อนหลัก
-    add     rcx, rax            ; บวกหลักใหม่
+printString: ;Phoom
+	push rbx
+	push rdx
+	mov rdx, 0
+	mov rbx, rdi
+.countString:
+	cmp byte[rbx], NULL
+	je .printOut
+	inc rbx
+	inc rdx
+	jmp .countString
 
-    inc     rsi
-    jmp     .read_digits_op2
+.printOut:
+	cmp rdx, 0
+	je .printDone
 
-.done_op2:
-    ; rcx = ค่า Operand2
+	mov rax, SYS_write
+	mov rsi, rdi
+	mov rdi, STDOUT
+	syscall
+	jmp .printDone
 
-    ; ── Dispatch — เลือก operation ──────────
-    cmp     r8b, '+'            ; operator คือ + ?
-    je      do_add
-    cmp     r8b, '-'            ; operator คือ - ?
-    je      do_sub
-    cmp     r8b, '*'            ; operator คือ * ?
-    je      do_mul
-    jmp     do_div              ; ถ้าไม่ใช่สามอย่างข้างบน ต้องเป็น /
-
-
-; ╔══════════════════════════════════════════════════════════╗
-; ║                      คนที่ 3                             ║
-; ║         คำนวณ + แปลง int→string + พิมพ์ + Exit          ║
-; ╚══════════════════════════════════════════════════════════╝
-
-    ; ── Operations ──────────────────────────
-    ; rbx = Operand1  |  rcx = Operand2  |  ผลลัพธ์เก็บใน rax
-
-do_add:
-    mov     rax, rbx            ; rax = Operand1
-    add     rax, rcx            ; rax = Operand1 + Operand2
-    jmp     print_result
-
-do_sub:
-    mov     rax, rbx            ; rax = Operand1
-    sub     rax, rcx            ; rax = Operand1 - Operand2
-    jmp     print_result
-
-do_mul:
-    mov     rax, rbx            ; rax = Operand1
-    imul    rax, rcx            ; rax = Operand1 × Operand2 (signed multiply)
-    jmp     print_result
-
-do_div:
-    mov     rax, rbx            ; rax = Operand1 (dividend ตัวตั้ง)
-    xor     rdx, rdx            ; ต้องเคลียร์ rdx = 0 ก่อนเสมอ
-                                ; เพราะ div ใช้ rdx:rax (128-bit) ÷ rcx
-                                ; ถ้า rdx มีขยะ → divide overflow crash ทันที
-    div     rcx                 ; rax = quotient (ผลหารจำนวนเต็ม)
-                                ; rdx = remainder (เศษ) ← ไม่ได้ใช้
-    jmp     print_result
-
-    ; ── แปลง int → string แล้วพิมพ์ ────────
-print_result:
-    lea     rsi, [outbuf + 7]   ; ชี้ rsi ไปท้าย outbuf
-                                ; จะค่อยๆ ถอยหน้ามาทีละ digit (เขียนจากหลังไปหน้า)
-    xor     r9, r9              ; r9 = 0 นับจำนวน digit ที่เขียนแล้ว
-
-.convert_loop:
-    xor     rdx, rdx            ; เคลียร์ rdx ก่อนหารทุกครั้ง
-    mov     r10, 10             ; ตัวหาร = 10
-    div     r10                 ; rax ÷ 10 → quotient→rax, เศษ(digit)→rdx
-
-    add     dl, '0'             ; แปลง digit → ASCII: 5 + 48 = '5'
-    dec     rsi                 ; เลื่อน pointer ถอยหลัง 1 ตำแหน่ง
-    mov     [rsi], dl           ; เขียน ASCII character ลง buffer
-
-    inc     r9                  ; digit count++
-
-    test    rax, rax            ; ตรวจว่า rax = 0 ไหม (หมดตัวเลขแล้ว)
-    jnz     .convert_loop       ; ยังไม่ 0 → วนต่อ
-
-    ; ── พิมพ์ตัวเลขผลลัพธ์ ──────────────────
-    mov     rax, 1              ; sys_write
-    mov     rdi, 1              ; stdout
-    ; rsi ยังชี้อยู่ที่ต้น string ที่แปลงแล้ว
-    mov     rdx, r9             ; ความยาว = จำนวน digit ที่นับ
-    syscall
-
-    ; ── พิมพ์ newline ────────────────────────
-    mov     rax, 1
-    mov     rdi, 1
-    mov     rsi, newline        ; ชี้ไปที่ newline byte (ASCII 10)
-    mov     rdx, 1              ; พิมพ์ 1 byte
-    syscall
-
-    ; ── จบโปรแกรม ───────────────────────────
-    mov     rax, 60             ; syscall number 60 = sys_exit
-    xor     rdi, rdi            ; exit code = 0 (สำเร็จ)
-    syscall
+.printDone:
+	pop rbx
+	pop rdx
+	ret
